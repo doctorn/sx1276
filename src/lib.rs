@@ -39,7 +39,7 @@
 //!     let sx1276 = sx1276::SX1276::new(spi, cs, reset, FREQUENCY)
 //!         .expect("Failed to communicate with radio module!");
 //!
-//!     let mut buffer = [0; 255];
+//!     let mut buffer = [0; sx1276::LORA_MTU];
 //!     loop {
 //!         if let Ok(size) = sx1276.receive(&mut buffer) {
 //!             for c in buffer[0..size].iter() {
@@ -85,7 +85,7 @@
 //!         .expect("Failed to communicate with radio module!");
 //!     sx1276.set_transmission_power(17);
 //!
-//!     let mut buffer = [0; 255];
+//!     let mut buffer = [0; sx1276::LORA_MTU];
 //!     for (b, c) in buffer.iter_mut().zip("HELLO".chars()) {
 //!         *b = c as u8;
 //!     }
@@ -108,8 +108,12 @@ use embedded_hal::digital::v2::OutputPin;
 /// The version number for the SX1276.
 pub const SX1276_VERSION: u8 = 0x12;
 
+/// The maximum transmission unit for LoRa payloads.
+pub const LORA_MTU: usize = 0xFF;
+
 mod registers;
 mod selected_spi;
+pub mod socket;
 
 use registers::{Mode, Reg, RegisterFile, IRQ};
 use selected_spi::SelectedSPI;
@@ -257,6 +261,20 @@ where
 
     // TODO collision restart threshold
 
+    fn reset(&mut self) {
+        self.reset.set_low().ok().unwrap();
+        thread::sleep(time::Duration::from_millis(10));
+        self.reset.set_high().ok().unwrap();
+        thread::sleep(time::Duration::from_millis(10));
+    }
+}
+
+impl<SPI, NSS, RESET, E> socket::Link for SX1276<SPI, NSS, RESET>
+where
+    SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
+    NSS: OutputPin,
+    RESET: OutputPin,
+{
     /// Poll for an incoming packet.
     ///
     /// If a packet was successfully received, returns `Ok(n)` where `n` is the number of bytes
@@ -272,7 +290,7 @@ where
     ///
     /// (255 not 256 because the register representing the number of bytes in a received packet is
     /// 8-bits and counts from 0.)
-    pub fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()> {
+    fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()> {
         let mut spi = self.spi.select();
         if !spi.in_mode(Mode::RxSingle) {
             spi.set_mode(Mode::RxSingle);
@@ -284,8 +302,8 @@ where
             let size = cmp::min(spi.read_reg(Reg::RxNbBytes) as usize, buffer.len());
             let fifo_addr = spi.read_reg(Reg::FifoRxCurrentAddr);
             spi.write_reg(Reg::FifoAddrPtr, fifo_addr);
-            for b in buffer[0..size].iter_mut() {
-                *b = spi.read_reg(Reg::Fifo);
+            for byte in buffer[0..size].iter_mut() {
+                *byte = spi.read_reg(Reg::Fifo);
             }
             spi.write_reg(Reg::FifoAddrPtr, 0);
             Ok(size)
@@ -303,12 +321,12 @@ where
     ///
     /// (255 not 256 because the register representing the number of bytes in a received packet is
     /// 8-bits and counts from 0.)
-    pub fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
+    fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
         let mut spi = self.spi.select();
         if spi.in_mode(Mode::Tx) {
             Err(())
         } else {
-            let size = cmp::min(255, buffer.len());
+            let size = cmp::min(LORA_MTU, buffer.len());
             spi.set_mode(Mode::Stdby);
             spi.write_reg(Reg::FifoAddrPtr, 0);
             spi.write_reg(Reg::PayloadLength, 0);
@@ -322,12 +340,5 @@ where
             spi.clear_irq(IRQ::TxDone);
             Ok(size)
         }
-    }
-
-    fn reset(&mut self) {
-        self.reset.set_low().ok().unwrap();
-        thread::sleep(time::Duration::from_millis(10));
-        self.reset.set_high().ok().unwrap();
-        thread::sleep(time::Duration::from_millis(10));
     }
 }
