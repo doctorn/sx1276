@@ -298,7 +298,7 @@ where
         } else if !spi.received_irq(IRQ::RxDone) {
             Err(())
         } else {
-            spi.clear_irq(IRQ::RxDone);
+            spi.clear_irq();
             let size = cmp::min(spi.read_reg(Reg::RxNbBytes) as usize, buffer.len());
             let fifo_addr = spi.read_reg(Reg::FifoRxCurrentAddr);
             spi.write_reg(Reg::FifoAddrPtr, fifo_addr);
@@ -337,7 +337,7 @@ where
             spi.set_mode(Mode::Tx);
             while !spi.received_irq(IRQ::TxDone) {}
             // Section 4.1.3 states we automatically return to Stdby here
-            spi.clear_irq(IRQ::TxDone);
+            spi.clear_irq();
             Ok(size)
         }
     }

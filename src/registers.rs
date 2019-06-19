@@ -81,9 +81,8 @@ pub trait RegisterFile {
         self.read_reg(Reg::IrqFlags).get_bit(irq as usize)
     }
 
-    fn clear_irq(&mut self, irq: IRQ) {
-        let irq_flag = self.read_reg(Reg::IrqFlags) & (1 << irq as u8);
-        self.write_reg(Reg::IrqFlags, irq_flag);
+    fn clear_irq(&mut self) {
+        self.write_reg(Reg::IrqFlags, 0xFF);
     }
 }
 
