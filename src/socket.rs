@@ -71,14 +71,13 @@ where
                 waiting = cvar.wait(waiting).unwrap();
             }
             // TODO we want collision avoidance here
-            if let Some(packet) = waiting.pop_front() {
-                match body.link.transmit((&packet).into()) {
-                    Err(_) => waiting.push_front(packet),
+            if let Some(packet) = waiting.front() {
+                match body.link.transmit(packet.into()) {
                     // When queueing the transmission we reported that all bytes were transitted,
                     // so we need to retry send until we can send the whole packet.
-                    Ok(n) if n < packet.size() => waiting.push_front(packet),
-                    Ok(_) => continue,
-                }
+                    Ok(n) if n == packet.size() => waiting.pop_front(),
+                    _ => continue,
+                };
             }
         });
     }
