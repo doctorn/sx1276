@@ -253,18 +253,21 @@ where
             }
         }
         let mut spi = self.spi.select();
+        spi.set_mode(Mode::Stdby);
         spi.set_mode(Mode::CadMode);
         while !spi.received_irq(Irq::CadDone) {}
+        // Automatically dropped into Stdby mode here.
         let detected = spi.received_irq(Irq::CadDetected);
         spi.clear_irq();
         if detected {
+            // Drop back into RxContinuous if we detected signals on the channel.
+            spi.set_mode(Mode::RxContinuous);
             return Err(());
         }
         {
             *self.transmitting.write().unwrap() = true;
         }
         let size = cmp::min(LORA_MTU, buffer.len());
-        spi.set_mode(Mode::Stdby);
         spi.write_reg(Reg::FifoAddrPtr, 0);
         spi.write_reg(Reg::PayloadLength, 0);
         for byte in buffer[0..size].iter() {
