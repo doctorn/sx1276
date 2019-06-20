@@ -253,6 +253,9 @@ where
             }
         }
         let mut spi = self.spi.select();
+        if spi.received_irq(Irq::RxDone) {
+            return Err(());
+        }
         spi.set_mode(Mode::Stdby);
         spi.set_mode(Mode::CadMode);
         while !spi.received_irq(Irq::CadDone) {}
