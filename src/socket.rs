@@ -5,6 +5,8 @@ use crossbeam::queue::ArrayQueue;
 
 use super::LORA_MTU;
 
+const BUFFER_SIZE: usize = 1024;
+
 struct Packet([u8; LORA_MTU], usize);
 
 impl Packet {
@@ -67,7 +69,6 @@ where
         let body = Arc::clone(&self.0);
         thread::spawn(move || loop {
             while body.outq.is_empty() {}
-            // TODO we want collision avoidance here.
             if let Ok(packet) = body.outq.pop() {
                 let buffer = (&packet).into();
                 // Re-try physical transmission until we get through.
@@ -100,8 +101,8 @@ where
 {
     fn from(t: T) -> Self {
         let lora = LoRa(Arc::new(LoRaBody {
-            inq: ArrayQueue::new(1024),
-            outq: ArrayQueue::new(1024),
+            inq: ArrayQueue::new(BUFFER_SIZE),
+            outq: ArrayQueue::new(BUFFER_SIZE),
             link: t,
         }));
         lora.init();
