@@ -248,15 +248,21 @@ where
     /// 8-bits and counts from 0.)
     fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
         {
-            let transmitting = self.transmitting.read().unwrap();
-            if *transmitting {
+            if *self.transmitting.read().unwrap() {
                 return Err(());
             }
+        }
+        let mut spi = self.spi.select();
+        spi.set_mode(Mode::CadMode);
+        while !spi.received_irq(Irq::CadDone) {}
+        let detected = spi.received_irq(Irq::CadDetected);
+        spi.clear_irq();
+        if detected {
+            return Err(());
         }
         {
             *self.transmitting.write().unwrap() = true;
         }
-        let mut spi = self.spi.select();
         let size = cmp::min(LORA_MTU, buffer.len());
         spi.set_mode(Mode::Stdby);
         spi.write_reg(Reg::FifoAddrPtr, 0);

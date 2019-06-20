@@ -145,6 +145,7 @@ pub enum Mode {
     Tx = 0x03,
     RxContinuous = 0x05,
     RxSingle = 0x06,
+    CadMode = 0x07,
 }
 
 #[derive(Copy, Clone)]
