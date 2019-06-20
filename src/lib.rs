@@ -253,8 +253,9 @@ where
                 return Err(());
             }
         }
-        let mut transmitting = self.transmitting.write().unwrap();
-        *transmitting = true;
+        {
+            *self.transmitting.write().unwrap() = true;
+        }
         let mut spi = self.spi.select();
         let size = cmp::min(LORA_MTU, buffer.len());
         spi.set_mode(Mode::Stdby);
@@ -270,7 +271,9 @@ where
         // into RxContinuous.
         spi.set_mode(Mode::RxContinuous);
         spi.clear_irq();
-        *transmitting = false;
+        {
+            *self.transmitting.write().unwrap() = false;
+        }
         Ok(size)
     }
 }

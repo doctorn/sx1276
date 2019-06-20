@@ -61,7 +61,7 @@ where
             loop {
                 match body.link.receive(&mut buffer) {
                     Ok(size) => while let Err(_) = body.inq.push(buffer[0..size].into()) {},
-                    Err(()) => continue,
+                    _ => continue,
                 };
             }
         });
