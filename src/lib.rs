@@ -4,106 +4,18 @@
 //! All examples here assume the use of a Raspberry Pi Model 3B+ with the Dragino SX1276 LoRa HAT;
 //! however, it should be possible to use the crate on any hardware implementing the necessary
 //! traits from the `embedded_hal` crate.
-//!
-//! # Examples
-//! ## Simple Receive
-//! ```no_run
-//! extern crate embedded_hal;
-//! extern crate linux_embedded_hal as hal;
-//!
-//! use hal::spidev::{self, SpidevOptions};
-//! use hal::sysfs_gpio::Direction;
-//! use hal::{Pin, Spidev};
-//!
-//! const NSS_PIN: u64 = 25;
-//! const RESET_PIN: u64 = 17;
-//! const FREQUENCY: u64 = 868;
-//!
-//! fn main() {
-//!     let mut spi = Spidev::open("/dev/spidev0.0").unwrap();
-//!     let options = SpidevOptions::new()
-//!         .bits_per_word(8)
-//!         .max_speed_hz(1_000_000)
-//!         .mode(spidev::SPI_MODE_0)
-//!         .build();
-//!     spi.configure(&options).unwrap();
-//!
-//!     let cs = Pin::new(NSS_PIN);
-//!     cs.export().unwrap();
-//!     cs.set_direction(Direction::Out).unwrap();
-//!
-//!     let reset = Pin::new(RESET_PIN);
-//!     reset.export().unwrap();
-//!     reset.set_direction(Direction::Out).unwrap();
-//!
-//!     let sx1276 = sx1276::SX1276::new(spi, cs, reset, FREQUENCY)
-//!         .expect("Failed to communicate with radio module!");
-//!
-//!     let mut buffer = [0; sx1276::LORA_MTU];
-//!     loop {
-//!         if let Ok(size) = sx1276.receive(&mut buffer) {
-//!             for c in buffer[0..size].iter() {
-//!                 print!("{}", *c as char)
-//!             }
-//!             println!();
-//!         }
-//!     }
-//! }
-//! ```
-//!
-//! ## Simple Transmit
-//! ```no_run
-//! extern crate embedded_hal;
-//! extern crate linux_embedded_hal as hal;
-//!
-//! use hal::spidev::{self, SpidevOptions};
-//! use hal::sysfs_gpio::Direction;
-//! use hal::{Pin, Spidev};
-//!
-//! const NSS_PIN: u64 = 25;
-//! const RESET_PIN: u64 = 17;
-//! const FREQUENCY: u64 = 868;
-//!
-//! fn main() {
-//!     let mut spi = Spidev::open("/dev/spidev0.0").unwrap();
-//!     let options = SpidevOptions::new()
-//!         .bits_per_word(8)
-//!         .max_speed_hz(1_000_000)
-//!         .mode(spidev::SPI_MODE_0)
-//!         .build();
-//!     spi.configure(&options).unwrap();
-//!
-//!     let cs = Pin::new(NSS_PIN);
-//!     cs.export().unwrap();
-//!     cs.set_direction(Direction::Out).unwrap();
-//!
-//!     let reset = Pin::new(RESET_PIN);
-//!     reset.export().unwrap();
-//!     reset.set_direction(Direction::Out).unwrap();
-//!
-//!     let sx1276 = sx1276::SX1276::new(spi, cs, reset, FREQUENCY)
-//!         .expect("Failed to communicate with radio module!");
-//!     sx1276.set_transmission_power(17);
-//!
-//!     let mut buffer = [0; sx1276::LORA_MTU];
-//!     for (b, c) in buffer.iter_mut().zip("HELLO".chars()) {
-//!         *b = c as u8;
-//!     }
-//!     loop {
-//!         sx1276.transmit(&buffer);
-//!     }
-//! }
-//! ```
 #![crate_type = "lib"]
 #![crate_name = "sx1276"]
 
 extern crate bit_field;
+extern crate crossbeam;
 extern crate embedded_hal;
 
+use std::sync::RwLock;
 use std::{cmp, thread, time};
 
 use embedded_hal::blocking::spi::{Transfer, Write};
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
 
 /// The version number for the SX1276.
 pub const SX1276_VERSION: u8 = 0x12;
@@ -115,7 +27,7 @@ mod registers;
 mod selected_spi;
 pub mod socket;
 
-use registers::{Mode, Reg, RegisterFile, IRQ};
+use registers::{Irq, Mode, Reg, RegisterFile};
 use selected_spi::SelectedSPI;
 
 /// An immutable abstraction of the SX1276 chip. Can be safely used between threads. Creating
@@ -124,15 +36,18 @@ use selected_spi::SelectedSPI;
 /// For information about the specific behaviour of any of the methods implemented for this
 /// `struct` with respect to LoRa modulation, please refer to the
 /// [datasheet](https://www.mouser.com/ds/2/761/sx1276-1278113.pdf) for the chip.
-pub struct SX1276<SPI, NSS, RESET> {
+pub struct SX1276<SPI, NSS, IRQ, RESET> {
     spi: SelectedSPI<SPI, NSS>,
+    irq: IRQ,
     reset: RESET,
+    transmitting: RwLock<bool>,
 }
 
-impl<SPI, NSS, RESET, E> SX1276<SPI, NSS, RESET>
+impl<SPI, NSS, IRQ, RESET, E> SX1276<SPI, NSS, IRQ, RESET>
 where
     SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
     NSS: OutputPin,
+    IRQ: InputPin,
     RESET: OutputPin,
 {
     /// Build a new instance of the chip using the given SPI channel, slave select pin and reset
@@ -143,9 +58,15 @@ where
     ///
     /// In order to share the same hardware between multiple owners please use [`Rc`](std::rc::Rc)
     /// or [`Arc`](std::sync::Arc).
-    pub fn new(spi: SPI, nss: NSS, reset: RESET, freq: u64) -> Result<Self, u8> {
+    pub fn new(spi: SPI, nss: NSS, irq: IRQ, reset: RESET, freq: u64) -> Result<Self, u8> {
         let spi = SelectedSPI::new(spi, nss);
-        let mut sx1276 = SX1276 { spi, reset };
+        let transmitting = RwLock::new(false);
+        let mut sx1276 = SX1276 {
+            spi,
+            irq,
+            reset,
+            transmitting,
+        };
         sx1276.reset();
         match sx1276.get_version() {
             SX1276_VERSION => {
@@ -161,6 +82,7 @@ where
                     // Set boost to 150% TODO check if this is necessary
                     spi.write_reg(Reg::Lna, lna | 0x03);
                     spi.write_reg(Reg::ModemConfig3, 0x04);
+                    spi.set_mode(Mode::RxContinuous);
                 }
                 Ok(sx1276)
             }
@@ -269,10 +191,11 @@ where
     }
 }
 
-impl<SPI, NSS, RESET, E> socket::Link for SX1276<SPI, NSS, RESET>
+impl<SPI, NSS, RESET, IRQ, E> socket::Link for SX1276<SPI, NSS, IRQ, RESET>
 where
     SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
     NSS: OutputPin,
+    IRQ: InputPin,
     RESET: OutputPin,
 {
     /// Poll for an incoming packet.
@@ -291,30 +214,32 @@ where
     /// (255 not 256 because the register representing the number of bytes in a received packet is
     /// 8-bits and counts from 0.)
     fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()> {
-        let mut spi = self.spi.select();
-        if !spi.in_mode(Mode::RxSingle) {
-            spi.set_mode(Mode::RxSingle);
-            Err(())
-        } else if !spi.received_irq(IRQ::RxDone) {
-            Err(())
-        } else {
-            spi.clear_irq();
-            let size = cmp::min(spi.read_reg(Reg::RxNbBytes) as usize, buffer.len());
-            let fifo_addr = spi.read_reg(Reg::FifoRxCurrentAddr);
-            spi.write_reg(Reg::FifoAddrPtr, fifo_addr);
-            for byte in buffer[0..size].iter_mut() {
-                *byte = spi.read_reg(Reg::Fifo);
+        let transmitting = self.transmitting.read().unwrap();
+        if !*transmitting {
+            if !self.irq.is_high().ok().unwrap() {
+                Err(())
+            } else {
+                let mut spi = self.spi.select();
+                spi.clear_irq();
+                let size = cmp::min(spi.read_reg(Reg::RxNbBytes) as usize, buffer.len());
+                let fifo_addr = spi.read_reg(Reg::FifoRxCurrentAddr);
+                spi.write_reg(Reg::FifoAddrPtr, fifo_addr);
+                for byte in buffer[0..size].iter_mut() {
+                    *byte = spi.read_reg(Reg::Fifo);
+                }
+                spi.write_reg(Reg::FifoAddrPtr, 0);
+                Ok(size)
             }
-            spi.write_reg(Reg::FifoAddrPtr, 0);
-            Ok(size)
+        } else {
+            Err(())
         }
     }
 
     /// Transmit the contents of a buffer as an outgoing packet.
     ///
     /// If a packet was successfully transmitted, returns `Ok(n)` where `n` is the number of bytes
-    /// successfully transmitted. Otherwise, returns `Err(())` (this will occur if the chip is
-    /// already in mode `Tx`, i.e. a transmission is already taking place).
+    /// successfully transmitted. Otherwise, returns `Err(())` (this may occur if the board is
+    /// already transmitting).
     ///
     /// The maximum transmission unit is 255 bytes and therefore any bytes after the first 255 will
     /// not be transmitted.
@@ -322,23 +247,30 @@ where
     /// (255 not 256 because the register representing the number of bytes in a received packet is
     /// 8-bits and counts from 0.)
     fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
-        let mut spi = self.spi.select();
-        if spi.in_mode(Mode::Tx) {
-            Err(())
-        } else {
-            let size = cmp::min(LORA_MTU, buffer.len());
-            spi.set_mode(Mode::Stdby);
-            spi.write_reg(Reg::FifoAddrPtr, 0);
-            spi.write_reg(Reg::PayloadLength, 0);
-            for byte in buffer[0..size].iter() {
-                spi.write_reg(Reg::Fifo, *byte);
+        {
+            let transmitting = self.transmitting.read().unwrap();
+            if *transmitting {
+                return Err(());
             }
-            spi.write_reg(Reg::PayloadLength, size as u8);
-            spi.set_mode(Mode::Tx);
-            while !spi.received_irq(IRQ::TxDone) {}
-            // Section 4.1.3 states we automatically return to Stdby here
-            spi.clear_irq();
-            Ok(size)
         }
+        let mut transmitting = self.transmitting.write().unwrap();
+        *transmitting = true;
+        let mut spi = self.spi.select();
+        let size = cmp::min(LORA_MTU, buffer.len());
+        spi.set_mode(Mode::Stdby);
+        spi.write_reg(Reg::FifoAddrPtr, 0);
+        spi.write_reg(Reg::PayloadLength, 0);
+        for byte in buffer[0..size].iter() {
+            spi.write_reg(Reg::Fifo, *byte);
+        }
+        spi.write_reg(Reg::PayloadLength, size as u8);
+        spi.set_mode(Mode::Tx);
+        while !spi.received_irq(Irq::TxDone) {}
+        // Section 4.1.3 states we automatically return to Stdby here, so overwrite and flip
+        // into RxContinuous.
+        spi.set_mode(Mode::RxContinuous);
+        spi.clear_irq();
+        *transmitting = false;
+        Ok(size)
     }
 }

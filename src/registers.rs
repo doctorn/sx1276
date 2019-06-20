@@ -72,12 +72,7 @@ pub trait RegisterFile {
         self.write_reg(Reg::OpMode, Mode::LoRa as u8 | mode as u8);
     }
 
-    fn in_mode(&mut self, mode: Mode) -> bool {
-        let mode = mode as u8;
-        self.read_reg(Reg::OpMode) & mode == mode
-    }
-
-    fn received_irq(&mut self, irq: IRQ) -> bool {
+    fn received_irq(&mut self, irq: Irq) -> bool {
         self.read_reg(Reg::IrqFlags).get_bit(irq as usize)
     }
 
@@ -141,7 +136,7 @@ pub enum Reg {
     PaDac = 0x4d,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[allow(unused)]
 pub enum Mode {
     LoRa = 0x80,
@@ -154,7 +149,7 @@ pub enum Mode {
 
 #[derive(Copy, Clone)]
 #[allow(unused)]
-pub enum IRQ {
+pub enum Irq {
     RxTimeout = 0x07,
     RxDone = 0x06,
     PayloadCrcError = 0x05,

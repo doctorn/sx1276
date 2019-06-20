@@ -1,6 +1,7 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::{cmp, thread};
+
+use crossbeam::queue::ArrayQueue;
 
 use super::LORA_MTU;
 
@@ -41,8 +42,8 @@ impl<'a> Into<&'a [u8]> for &'a Packet {
 pub struct LoRa<T>(Arc<LoRaBody<T>>);
 
 struct LoRaBody<T> {
-    inq: Mutex<VecDeque<Packet>>,
-    outq: (Mutex<VecDeque<Packet>>, Condvar),
+    inq: ArrayQueue<Packet>,
+    outq: ArrayQueue<Packet>,
     link: T,
 }
 
@@ -57,33 +58,26 @@ where
             let mut buffer = [0; LORA_MTU];
             loop {
                 match body.link.receive(&mut buffer) {
-                    Ok(size) => body.inq.lock().unwrap().push_back(buffer[0..size].into()),
+                    Ok(size) => while let Err(_) = body.inq.push(buffer[0..size].into()) {},
                     Err(()) => continue,
-                }
+                };
             }
         });
         // Thread for transmitting buffered packets over the link.
         let body = Arc::clone(&self.0);
         thread::spawn(move || loop {
-            let &(ref lock, ref cvar) = &body.outq;
-            let mut waiting = lock.lock().unwrap();
-            while waiting.is_empty() {
-                waiting = cvar.wait(waiting).unwrap();
-            }
-            // TODO we want collision avoidance here
-            if let Some(packet) = waiting.front() {
-                match body.link.transmit(packet.into()) {
-                    // When queueing the transmission we reported that all bytes were transitted,
-                    // so we need to retry send until we can send the whole packet.
-                    Ok(n) if n == packet.size() => waiting.pop_front(),
-                    _ => continue,
-                };
+            while body.outq.is_empty() {}
+            // TODO we want collision avoidance here.
+            if let Ok(packet) = body.outq.pop() {
+                let buffer = (&packet).into();
+                // Re-try physical transmission until we get through.
+                while let Err(_) = body.link.transmit(buffer) {}
             }
         });
     }
 
     pub fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()> {
-        if let Some(packet) = self.0.inq.lock().unwrap().pop_front() {
+        if let Ok(packet) = self.0.inq.pop() {
             Ok(packet.copy_to_buffer(buffer))
         } else {
             Err(())
@@ -93,12 +87,10 @@ where
     pub fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
         let packet: Packet = buffer.into();
         let size = packet.size();
-        {
-            let &(ref lock, ref cvar) = &self.0.outq;
-            lock.lock().unwrap().push_back(packet);
-            cvar.notify_one();
+        match self.0.outq.push(packet) {
+            Ok(_) => Ok(size),
+            _ => Err(()),
         }
-        Ok(size)
     }
 }
 
@@ -108,8 +100,8 @@ where
 {
     fn from(t: T) -> Self {
         let lora = LoRa(Arc::new(LoRaBody {
-            inq: Mutex::new(VecDeque::new()),
-            outq: (Mutex::new(VecDeque::new()), Condvar::new()),
+            inq: ArrayQueue::new(1024),
+            outq: ArrayQueue::new(1024),
             link: t,
         }));
         lora.init();
