@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 bit_field = "0.9.0"
 crossbeam = "0.7.1"
+rand = "*"
 
 [dependencies.embedded-hal]
 version = "0.2.2"

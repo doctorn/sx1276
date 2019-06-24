@@ -10,6 +10,7 @@
 extern crate bit_field;
 extern crate crossbeam;
 extern crate embedded_hal;
+extern crate rand;
 
 use std::sync::RwLock;
 use std::{cmp, thread, time};

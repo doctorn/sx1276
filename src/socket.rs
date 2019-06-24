@@ -1,7 +1,9 @@
 use std::sync::Arc;
-use std::{cmp, thread};
+use std::{cmp, thread, time};
 
 use crossbeam::queue::ArrayQueue;
+
+use rand::Rng;
 
 use super::LORA_MTU;
 
@@ -67,13 +69,21 @@ where
         });
         // Thread for transmitting buffered packets over the link.
         let body = Arc::clone(&self.0);
-        thread::spawn(move || loop {
+        thread::spawn(move || {
+            let mut rng = rand::thread_rng();
+            loop {
             while body.outq.is_empty() {}
+            let mut retries = 0;
             if let Ok(packet) = body.outq.pop() {
                 let buffer = (&packet).into();
-                // Re-try physical transmission until we get through.
-                while let Err(_) = body.link.transmit(buffer) {}
+                // Re-try physical transmission until we get through. (BEB until retry count 3)
+                while let Err(_) = body.link.transmit(buffer) {
+                    retries = cmp::min(retries + 1, 3);
+                    let backoff = rng.gen_range(1, 1 << retries);
+                    thread::sleep(time::Duration::from_millis(100) * backoff);
+                }
             }
+        }
         });
     }
 
