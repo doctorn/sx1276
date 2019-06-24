@@ -76,11 +76,11 @@ where
                 let mut retries = 0;
                 if let Ok(packet) = body.outq.pop() {
                     let buffer = (&packet).into();
-                    // Re-try physical transmission until we get through. (BEB until retry count 3)
+                    // Re-try physical transmission until we get through. (BEB until retry count 5.)
                     while let Err(_) = body.link.transmit(buffer) {
-                        retries = cmp::min(retries + 1, 3);
-                        let backoff = rng.gen_range(1, 1 << retries);
-                        thread::sleep(time::Duration::from_secs(1) * backoff);
+                        retries = cmp::min(retries + 1, 5);
+                        let backoff = rng.gen_range(0, 1 << retries);
+                        thread::sleep(time::Duration::from_millis(500) * backoff);
                     }
                 }
             }
