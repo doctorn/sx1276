@@ -72,9 +72,9 @@ where
         thread::spawn(move || {
             let mut rng = rand::thread_rng();
             loop {
-            while body.outq.is_empty() {}
-                let mut retries = 0;
+                while body.outq.is_empty() {}
                 if let Ok(packet) = body.outq.pop() {
+                    let mut retries = 0;
                     let buffer = (&packet).into();
                     // Re-try physical transmission until we get through. (BEB until retry count 5.)
                     while let Err(_) = body.link.transmit(buffer) {
