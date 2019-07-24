@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::{cmp, thread, time};
+use std::{cmp, fmt, thread, time};
 
 use crossbeam::queue::ArrayQueue;
 
@@ -103,6 +103,13 @@ where
             _ => Err(()),
         }
     }
+
+    pub fn configure_link<F>(&self, f: F)
+    where
+        F: Fn(&dyn Link),
+    {
+        f(&self.0.link)
+    }
 }
 
 impl<T> From<T> for LoRa<T>
@@ -124,4 +131,10 @@ pub trait Link {
     fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()>;
 
     fn transmit(&self, buffer: &[u8]) -> Result<usize, ()>;
+}
+
+impl<T> fmt::Debug for LoRa<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "LoRa")
+    }
 }
