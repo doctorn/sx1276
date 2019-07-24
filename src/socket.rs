@@ -42,7 +42,6 @@ impl<'a> Into<&'a [u8]> for &'a Packet {
     }
 }
 
-#[derive(Clone)]
 pub struct LoRa<T>(Arc<LoRaBody<T>>);
 
 struct LoRaBody<T> {
@@ -136,5 +135,11 @@ pub trait Link {
 impl<T> fmt::Debug for LoRa<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "LoRa")
+    }
+}
+
+impl<T> Clone for LoRa<T> {
+    fn clone(&self) -> Self {
+        LoRa(Arc::clone(&self.0))
     }
 }
