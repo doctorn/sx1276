@@ -79,6 +79,66 @@ pub trait RegisterFile {
     fn clear_irq(&mut self) {
         self.write_reg(Reg::IrqFlags, 0xFF);
     }
+
+    fn get_signal_bandwith(&mut self) -> Option<u64> {
+        match self.read_reg(Reg::ModemConfig1) >> 4 {
+            0 => Some(7_800),
+            1 => Some(10_400),
+            2 => Some(15_600),
+            3 => Some(20_800),
+            4 => Some(31_250),
+            5 => Some(41_700),
+            6 => Some(62_500),
+            7 => Some(125_000),
+            8 => Some(250_000),
+            _ => None,
+        }
+    }
+
+    fn set_signal_bandwidth(&mut self, bandwidth: u64) {
+        let bandwidth = match bandwidth {
+            7_800..=10_399 => 0,
+            10_400..=15_599 => 1,
+            15_600..=20_799 => 2,
+            20_800..=31_249 => 3,
+            31_250..=41_699 => 4,
+            41_700..=62_499 => 5,
+            62_500..=124_999 => 6,
+            125_000..=249_999 => 7,
+            n if n >= 250_000 => 8,
+            _ => 9,
+        };
+        let config = self.read_reg(Reg::ModemConfig1) & 0x0F;
+        self.write_reg(Reg::ModemConfig1, config | (bandwidth << 4));
+        self.update_ldo_flag();
+    }
+
+    fn get_spreading_factor(&mut self) -> u8 {
+        self.read_reg(Reg::ModemConfig2) >> 4
+    }
+
+    fn set_spreading_factor(&mut self, sf: u8) {
+        let sf = cmp::min(cmp::max(6, sf), 12);
+        let config = self.read_reg(Reg::ModemConfig2) & 0x0F;
+        self.write_reg(Reg::ModemConfig2, config | (sf << 4));
+        self.update_ldo_flag();
+    }
+
+    fn set_ldo_flag(&mut self, state: bool) {
+        let mut config = self.read_reg(Reg::ModemConfig3);
+        config.set_bit(3, state);
+        self.write_reg(Reg::ModemConfig3, config)
+    }
+
+    fn update_ldo_flag(&mut self) {
+        if let Some(bandwidth) = self.get_signal_bandwith() {
+            // Section 4.1.1.5.
+            let symbol_duration = 1000 * (1 << self.get_spreading_factor()) / bandwidth;
+            // Section 4.1.1.6.
+            // Low data rate optimisation flag is required if the symbol length exceeds 16ms.
+            self.set_ldo_flag(symbol_duration > 16);
+        }
+    }
 }
 
 impl<SPI, E> RegisterFile for SPI

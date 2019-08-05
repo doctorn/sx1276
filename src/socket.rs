@@ -9,19 +9,26 @@ use super::LORA_MTU;
 
 const BUFFER_SIZE: usize = 1024;
 
-struct Packet([u8; LORA_MTU], usize);
+struct Packet {
+    size: usize,
+    buffer: [u8; LORA_MTU],
+    rssi: i32,
+    snr: f64,
+}
+
+pub struct PacketMetadata {
+    size: usize,
+    rssi: i32,
+    snr: f64,
+}
 
 impl Packet {
     fn copy_to_buffer(&self, buffer: &mut [u8]) -> usize {
-        let size = cmp::min(self.size(), buffer.len());
-        for (target, origin) in buffer[0..size].iter_mut().zip(self.0.iter()) {
+        let size = cmp::min(self.size, buffer.len());
+        for (target, origin) in buffer[0..size].iter_mut().zip(self.buffer.iter()) {
             *target = *origin;
         }
         size
-    }
-
-    fn size(&self) -> usize {
-        self.1
     }
 }
 
@@ -32,13 +39,42 @@ impl From<&[u8]> for Packet {
         for (target, origin) in target[0..size].iter_mut().zip(buffer.iter()) {
             *target = *origin;
         }
-        Packet(target, size)
+        Packet {
+            size,
+            buffer: target,
+            rssi: 0,
+            snr: 0f64,
+        }
+    }
+}
+
+impl PacketMetadata {
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn rssi(&self) -> i32 {
+        self.rssi
+    }
+
+    pub fn snr(&self) -> f64 {
+        self.snr
+    }
+}
+
+impl From<Packet> for PacketMetadata {
+    fn from(packet: Packet) -> PacketMetadata {
+        PacketMetadata {
+            size: packet.size,
+            rssi: packet.rssi,
+            snr: packet.snr,
+        }
     }
 }
 
 impl<'a> Into<&'a [u8]> for &'a Packet {
     fn into(self) -> &'a [u8] {
-        &self.0[0..self.1]
+        &self.buffer[0..self.size]
     }
 }
 
@@ -61,7 +97,17 @@ where
             let mut buffer = [0; LORA_MTU];
             loop {
                 match body.link.receive(&mut buffer) {
-                    Ok(size) => while let Err(_) = body.inq.push(buffer[0..size].into()) {},
+                    Ok(size) => {
+                        let rssi = body.link.get_last_rssi();
+                        let snr = body.link.get_last_snr();
+                        let size = cmp::min(size, LORA_MTU);
+                        while let Err(_) = body.inq.push(Packet {
+                            size,
+                            buffer: buffer.clone(),
+                            rssi,
+                            snr,
+                        }) {}
+                    }
                     _ => continue,
                 };
             }
@@ -86,9 +132,12 @@ where
         });
     }
 
-    pub fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()> {
+    pub fn receive(&self, buffer: &mut [u8]) -> Result<PacketMetadata, ()> {
         if let Ok(packet) = self.0.inq.pop() {
-            Ok(packet.copy_to_buffer(buffer))
+            let copied = packet.copy_to_buffer(buffer);
+            let mut metadata: PacketMetadata = packet.into();
+            metadata.size = copied;
+            Ok(metadata)
         } else {
             Err(())
         }
@@ -96,7 +145,7 @@ where
 
     pub fn transmit(&self, buffer: &[u8]) -> Result<usize, ()> {
         let packet: Packet = buffer.into();
-        let size = packet.size();
+        let size = packet.size;
         match self.0.outq.push(packet) {
             Ok(_) => Ok(size),
             _ => Err(()),
@@ -130,6 +179,10 @@ pub trait Link {
     fn receive(&self, buffer: &mut [u8]) -> Result<usize, ()>;
 
     fn transmit(&self, buffer: &[u8]) -> Result<usize, ()>;
+
+    fn get_last_rssi(&self) -> i32;
+
+    fn get_last_snr(&self) -> f64;
 }
 
 impl<T> fmt::Debug for LoRa<T> {

@@ -79,10 +79,11 @@ where
                     spi.write_reg(Reg::FifoRxBaseAddr, 0x00);
                     spi.write_reg(Reg::FifoTxBaseAddr, 0x00);
                     spi.set_mode(Mode::Stdby);
+                    // Set boost to 150%
                     let lna = spi.read_reg(Reg::Lna);
-                    // Set boost to 150% TODO check if this is necessary
                     spi.write_reg(Reg::Lna, lna | 0x03);
                     spi.write_reg(Reg::ModemConfig3, 0x04);
+                    // Drop into continuous read mode
                     spi.set_mode(Mode::RxContinuous);
                 }
                 Ok(sx1276)
@@ -144,16 +145,6 @@ where
         self.spi.select().set_frequency(freq)
     }
 
-    /// Get the RSSI for the last successfully received packet.
-    pub fn get_last_rssi(&self) -> i32 {
-        self.spi.select().get_last_rssi()
-    }
-
-    /// Get the signal to noise ration for the last successfully received packet.
-    pub fn get_last_snr(&self) -> f64 {
-        self.spi.select().get_last_snr()
-    }
-
     /// Set the transmission power for the antenna.
     ///
     /// The minimum value that can be used is 2 and the maxiumum value is 17. Any values outside of
@@ -172,13 +163,33 @@ where
 
     // TODO invert IQ
 
-    // TODO spreading factor
+    /// Set the spreading factor for the antenna.
+    ///
+    /// Supported values are 6 through 12. Values outside of this range are clamped.
+    pub fn set_spreading_factor(&self, sf: u8) {
+        self.spi.select().set_spreading_factor(sf)
+    }
 
-    // TODO signal bandwidth
+    /// Get the spreading factor for the antenna.
+    pub fn get_spreading_factor(&self) -> u8 {
+        self.spi.select().get_spreading_factor()
+    }
+
+    /// Set the signal bandwidth (in Hz) for the antenna.
+    ///
+    /// Supported values are 7,800Hz, 10,400Hz, 15,600Hz, 20,800Hz, 31,250Hz, 41,700Hz, 62,500Hz,
+    /// 125,000Hz and 250,000Hz. Values other than these are clamped downwards to the nearest
+    /// supported value.
+    pub fn set_signal_bandwidth(&self, bandwidth: u64) {
+        self.spi.select().set_signal_bandwidth(bandwidth);
+    }
+
+    /// Get the signal bandwidth (in Hz) for the antenna.
+    pub fn get_signal_bandwith(&self) -> Option<u64> {
+        self.spi.select().get_signal_bandwith()
+    }
 
     // TODO frequency error
-
-    // TODO LDO flag
 
     // TODO collision restarts
 
@@ -288,5 +299,15 @@ where
             *self.transmitting.write().unwrap() = false;
         }
         Ok(size)
+    }
+
+    /// Get the RSSI for the last successfully received packet.
+    fn get_last_rssi(&self) -> i32 {
+        self.spi.select().get_last_rssi()
+    }
+
+    /// Get the signal to noise ration for the last successfully received packet.
+    fn get_last_snr(&self) -> f64 {
+        self.spi.select().get_last_snr()
     }
 }
