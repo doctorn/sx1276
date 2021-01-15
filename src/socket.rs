@@ -118,13 +118,13 @@ where
             let mut rng = rand::thread_rng();
             loop {
                 while body.outq.is_empty() {}
-                if let Ok(packet) = body.outq.pop() {
+                if let Some(packet) = body.outq.pop() {
                     let mut retries = 0;
                     let buffer = (&packet).into();
                     // Re-try physical transmission until we get through. (BEB until retry count 5.)
                     while let Err(_) = body.link.transmit(buffer) {
                         retries = cmp::min(retries + 1, 4);
-                        let backoff = rng.gen_range(0, 1 << retries);
+                        let backoff = rng.gen_range(0..(1 << retries));
                         thread::sleep(time::Duration::from_millis(500) * backoff);
                     }
                 }
@@ -133,7 +133,7 @@ where
     }
 
     pub fn receive(&self, buffer: &mut [u8]) -> Result<PacketMetadata, ()> {
-        if let Ok(packet) = self.0.inq.pop() {
+        if let Some(packet) = self.0.inq.pop() {
             let copied = packet.copy_to_buffer(buffer);
             let mut metadata: PacketMetadata = packet.into();
             metadata.size = copied;
